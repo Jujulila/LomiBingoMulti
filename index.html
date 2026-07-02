@@ -60,7 +60,7 @@
     border-radius: 15px;
     padding: 10px;
     font-weight: bold;
-    font-size: 18px;
+    font-size: 24px;
     transition: background 0.2s ease, transform 0.1s ease;
     user-select: none;
     word-wrap: break-word;
@@ -173,7 +173,7 @@
       wsUrl = 'ws://localhost:8080';
     } else {
       // Configuration for when the code runs live on GitHub Pages
-      wsUrl = 'https://lomi-bingo-backend.onrender.com';
+      wsUrl = 'wss://lomi-bingo-backend.onrender.com';
     }
     
     console.log(`Connecting to server environment: ${isLocal ? 'LOCAL' : 'PRODUCTION'} via ${wsUrl}`);
