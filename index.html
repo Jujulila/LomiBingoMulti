@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LomiBingo Multiplayer</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background-color: #f0f0f0;
+    font-family: system-ui, -apple-system, sans-serif;
+    overflow: hidden;
+  }
+
+  .container {
+    position: relative;
+    transform-origin: center center;
+    flex-shrink: 0;
+  }
+
+  .grid {
+    display: grid;
+    gap: 8px;
+    padding: 44px;
+    box-sizing: border-box;
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 1;
+  }
+
+  .overlay-grid {
+    position: absolute;
+    top: 0;
+    left: 0;
+    pointer-events: none;
+    z-index: 2;
+    display: grid;
+  }
+
+  .overlay-grid img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+  }
+
+  .cell {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+    background: rgba(255, 255, 255, 0.7);
+    border-radius: 15px;
+    padding: 10px;
+    font-weight: bold;
+    font-size: 18px;
+    transition: background 0.2s ease, transform 0.1s ease;
+    user-select: none;
+    word-wrap: break-word;
+    border: 2px solid transparent;
+    cursor: pointer;
+  }
+
+  .cell:active { transform: scale(0.98); }
+  .cell.checked { 
+    text-decoration: line-through; 
+    cursor: not-allowed;
+  }
+
+  .control-bar {
+    position: fixed;
+    bottom: 15px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    background: rgba(255, 255, 255, 0.9);
+    padding: 8px 20px;
+    border-radius: 30px;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.15);
+    backdrop-filter: blur(5px);
+  }
+
+  .player-config {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    color: #374151;
+    border-right: 2px solid #e5e7eb;
+    padding-right: 15px;
+  }
+
+  .color-picker {
+    border: none;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    cursor: pointer;
+    background: none;
+  }
+  .color-picker::-webkit-color-swatch-wrapper { padding: 0; }
+  .color-picker::-webkit-color-swatch { border: 2px solid #d1d5db; border-radius: 50%; }
+
+  .btn {
+    padding: 8px 16px;
+    border: none;
+    border-radius: 20px;
+    background-color: #2563eb;
+    color: white;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 14px;
+  }
+  .btn:hover { background-color: #1d4ed8; }
+  .btn-load { background-color: #4b5563; }
+  #fileInput { display: none; }
+  
+  #status-indicator {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background-color: #ef4444;
+  }
+  #status-indicator.connected { background-color: #22c55e; }
+</style>
+</head>
+<body>
+
+<div class="control-bar">
+  <div class="player-config">
+    <div id="status-indicator" title="Statut de connexion"></div>
+    <label for="playerColor">Ma Couleur:</label>
+    <input type="color" id="playerColor" class="color-picker" value="#3b82f6">
+  </div>
+  <button class="btn" onclick="exportBoard()">Sauvegarder</button>
+  <button class="btn btn-load" onclick="document.getElementById('fileInput').click()">Charger</button>
+  <input type="file" id="fileInput" accept=".json" onchange="importBoard(event)">
+</div>
+
+<div class="container" id="boardContainer">
+  <div class="grid" id="bingoBoard"></div>
+  <div class="overlay-grid" id="overlayGrid"></div>
+</div>
+
+<script>
+  let rows = 4;
+  let cols = 4;
+  let socket;
+  let currentCellsData = [];
+
+  // Intelligent WebSocket connection mapping
+  function connectWebSocket() {
+    let wsUrl;
+    
+    // Detect environment dynamically
+    const isLocal = window.location.hostname === 'localhost' || 
+                    window.location.hostname === '127.0.0.1' || 
+                    window.location.protocol === 'file:';
+
+    if (isLocal) {
+      // Configuration for testing locally on your PC
+      wsUrl = 'ws://localhost:8080';
+    } else {
+      // Configuration for when the code runs live on GitHub Pages
+      wsUrl = 'wss://lomi-bingo-backend.onrender.com';
+    }
+    
+    console.log(`Connecting to server environment: ${isLocal ? 'LOCAL' : 'PRODUCTION'} via ${wsUrl}`);
+    socket = new WebSocket(wsUrl);
+
+    socket.onopen = () => {
+      document.getElementById('status-indicator').classList.add('connected');
+    };
+
+    socket.onclose = () => {
+      document.getElementById('status-indicator').classList.remove('connected');
+      setTimeout(connectWebSocket, 3000); // Reconnect loop if the server restarts
+    };
+
+    socket.onmessage = (event) => {
+      const message = JSON.parse(event.data);
+      if (message.type === 'SYNC' || message.type === 'UPDATE') {
+        rows = message.rows;
+        cols = message.cols;
+        currentCellsData = message.cells;
+        buildBoard(message.cells);
+      }
+    };
+  }
+
+  function getContrastColor(hexcolor) {
+    hexcolor = hexcolor.replace("#", "");
+    const r = parseInt(hexcolor.substr(0,2),16);
+    const g = parseInt(hexcolor.substr(2,2),16);
+    const b = parseInt(hexcolor.substr(4,2),16);
+    const yiq = ((r*299)+(g*587)+(b*114))/1000;
+    return (yiq >= 128) ? '#000000' : '#ffffff';
+  }
+
+  function buildBoard(data = null) {
+    const board = document.getElementById('bingoBoard');
+    const overlay = document.getElementById('overlayGrid');
+    const container = document.getElementById('boardContainer');
+    
+    board.innerHTML = '';
+    overlay.innerHTML = '';
+
+    const cellWidth = 248;
+    const cellGap = 8;
+    const padding = 44;
+    
+    board.style.gridTemplateColumns = `repeat(${cols}, ${cellWidth}px)`;
+    board.style.gridTemplateRows = `repeat(${rows}, ${cellWidth}px)`;
+    
+    const colTemplate = cols > 1 ? `296px ${cols > 2 ? 'repeat(' + (cols - 2) + ', 256px)' : ''} 296px` : '592px';
+    const rowTemplate = rows > 1 ? `296px ${rows > 2 ? 'repeat(' + (rows - 2) + ', 256px)' : ''} 296px` : '592px';
+    
+    overlay.style.gridTemplateColumns = colTemplate;
+    overlay.style.gridTemplateRows = rowTemplate;
+
+    const totalWidth = (cols * cellWidth) + ((cols - 1) * cellGap) + (padding * 2);
+    const totalHeight = (rows * cellWidth) + ((rows - 1) * cellGap) + (padding * 2);
+    
+    container.style.width = `${totalWidth}px`;
+    container.style.height = `${totalHeight}px`;
+
+    for (let i = 0; i < rows * cols; i++) {
+      const div = document.createElement('div');
+      div.className = 'cell';
+      
+      const cellData = data && data[i] ? data[i] : { text: "Vide", checked: false, color: null };
+      div.innerText = cellData.text;
+      
+      if (cellData.checked) {
+        div.classList.add('checked');
+        if (cellData.color) {
+          div.style.backgroundColor = cellData.color;
+          div.style.color = getContrastColor(cellData.color);
+        }
+      }
+
+      div.onclick = () => { 
+        if (cellData.checked) return; 
+
+        const chosenColor = document.getElementById('playerColor').value;
+        
+        socket.send(JSON.stringify({
+          type: 'CLAIM',
+          index: i,
+          color: chosenColor
+        }));
+      };
+      board.appendChild(div);
+    }
+
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const img = document.createElement('img');
+        let src = 'M.png';
+        if (r === 0 && c === 0) src = 'UL.png';
+        else if (r === 0 && c === cols - 1) src = 'UR.png';
+        else if (r === rows - 1 && c === 0) src = 'DL.png';
+        else if (r === rows - 1 && c === cols - 1) src = 'DR.png';
+        else if (r === 0) src = 'U.png';
+        else if (r === rows - 1) src = 'D.png';
+        else if (c === 0) src = 'L.png';
+        else if (c === cols - 1) src = 'R.png';
+        
+        img.src = src;
+        overlay.appendChild(img);
+      }
+    }
+    fitToScreen(); 
+  }
+
+  function fitToScreen() {
+    const container = document.getElementById('boardContainer');
+    container.style.transform = 'scale(1)'; 
+    const scale = Math.min(
+      (window.innerWidth - 40) / container.offsetWidth, 
+      (window.innerHeight - 100) / container.offsetHeight, 
+      1
+    );
+    container.style.transform = `scale(${scale})`;
+  }
+
+  function exportBoard() {
+    const payload = JSON.stringify({ rows, cols, cells: currentCellsData });
+    const blob = new Blob([payload], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `bingo-board.json`;
+    a.click();
+  }
+
+  function importBoard(event) {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const data = JSON.parse(e.target.result);
+      socket.send(JSON.stringify({
+        type: 'IMPORT',
+        rows: data.rows,
+        cols: data.cols,
+        cells: data.cells
+      }));
+    };
+    reader.readAsText(event.target.files[0]);
+  }
+
+  window.addEventListener('resize', fitToScreen);
+  connectWebSocket();
+</script>
+
+</body>
+</html>
